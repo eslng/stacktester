@@ -2,3 +2,4 @@ httplib2
 nose
 unittest2
 paramiko==1.7.6
+pycrypto

@@ -10,7 +10,7 @@ class API(stacktester.common.http.Client):
     """Barebones Nova HTTP API client."""
 
     def __init__(self, host, port, auth_base_path, user, api_key,
-                 project_id='', service_name="nova"):
+                 project_id='', service_name="compute"):
         """Initialize Nova HTTP API client.
 
         :param host: Hostname/IP of the Nova API to test.
@@ -69,22 +69,37 @@ class API(stacktester.common.http.Client):
         if self.token:
             return self.token
 
-        creds = {
-            'passwordCredentials': {
-                'username': user,
-                'password': api_key}
-        }
+        creds = { "auth" : {
+            "passwordCredentials": {
+                "username": user,
+                "password": api_key},
 
+            },
+        }
         headers = {'Content-Type': 'application/json'}
+
         resp, body = super(API, self).request('POST', '', headers=headers,
                                               body=json.dumps(creds),
                                               base_url=self.auth_base_url)
         try:
-            auth_data = json.loads(body)['auth']
-            self.token = auth_data['token']['id']
+            auth_data = json.loads(body)['access']
+            temp_token = auth_data['token']['id']
             svc_name=self.service_name
-            mgmt_url = auth_data['serviceCatalog'][svc_name][0]['publicURL']
-            self.management_url = mgmt_url.rstrip('/') + '/' + project_id
+            tenant_info = { 'auth' : {
+                    'tenantName': project_id,
+                    'token': {'id': temp_token}
+                    },
+               }
+            resp, body = super(API, self).request('POST', '', headers=headers,
+                                                  body=json.dumps(tenant_info),
+                                                  base_url=self.auth_base_url)
+            tenant_auth_data = json.loads(body)['access']
+            self.token = tenant_auth_data['token']['id']
+            catalog_data = json.loads(body)['access']['serviceCatalog']
+            for service in catalog_data:
+                if service['type'] == svc_name:
+                    mgmt_url = service['endpoints'][0]['publicURL']
+                    self.management_url = mgmt_url
             return self.token
         except KeyError:
             print "Failed to authenticate user"
@@ -150,7 +165,7 @@ class API(stacktester.common.http.Client):
             headers['X-Auth-Token'] = self.authenticate(self.user,
                                                         self.api_key,
                                                         self.project_id)
- 
+
         kwargs['headers'] = headers
         return super(API, self).request(method, url, **kwargs)
 

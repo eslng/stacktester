@@ -29,16 +29,22 @@ class ImagesTest(unittest.TestCase):
 
         expected_links = [
             {
-                'rel': 'self',
-                'href': self_link,
+                u'rel': u'self',
+                u'href': self_link,
             },
             {
-                'rel': 'bookmark',
-                'href': bookmark_link,
+                u'rel': u'bookmark',
+                u'href': bookmark_link,
             },
         ]
 
-        self.assertEqual(image['links'], expected_links)
+        # We'll remove alternate URLs as they are not so critical
+        image_links = []
+        for link in image['links']:
+            if link['rel'] != 'alternate':
+                image_links.append(link)
+
+        self.assertEqual(image_links, expected_links)
 
     def _assert_image_entity_basic(self, image):
         actual_keys = set(image.keys())
@@ -65,6 +71,8 @@ class ImagesTest(unittest.TestCase):
             'status',
             'metadata',
             'links',
+            'minRam',
+            'minDisk',
         ))
         self.assertEqual(actual_keys, expected_keys)
 
