@@ -33,14 +33,14 @@ class FlavorsTest(unittest.TestCase):
 
     def _assert_flavor_entity_basic(self, flavor):
         actual_keys = set(flavor.keys())
-        expected_keys = set(('id', 'name', 'links'))
+        expected_keys = set((u'id', u'name', u'links'))
         self.assertEqual(actual_keys, expected_keys)
         self._assert_flavor_links(flavor)
 
     def _assert_flavor_entity_detailed(self, flavor):
         actual_keys = set(flavor.keys())
-        expected_keys = set(('id', 'name', 'ram', 'disk', 'links'))
-        self.assertEqual(actual_keys, expected_keys)
+        expected_keys = set((u'id', u'name', u'links', u'ram', u'vcpus', u'swap', u'rxtx_factor', u'OS-FLV-EXT-DATA:ephemeral', u'disk'))
+        self.assertEqual(expected_keys, actual_keys)
         self.assertEqual(type(flavor['ram']), int)
         self.assertEqual(type(flavor['disk']), int)
         self._assert_flavor_links(flavor)

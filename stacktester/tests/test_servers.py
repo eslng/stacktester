@@ -1,4 +1,3 @@
-
 import base64
 import datetime
 import json
@@ -11,6 +10,7 @@ from stacktester import openstack
 from stacktester import exceptions
 from stacktester.common import ssh
 from stacktester.common import utils
+import nose
 
 
 class ServersTest(unittest.TestCase):
@@ -22,31 +22,45 @@ class ServersTest(unittest.TestCase):
         self.flavor_ref = self.os.config.env.flavor_ref
         self.ssh_timeout = self.os.config.nova.ssh_timeout
         self.build_timeout = self.os.config.nova.build_timeout
+        pkey, pub_key, fingerprint = ssh.generate_key()
+        self.ssh_keypair = {'pkey': pkey,
+                            'pub_key': pub_key,
+                            'fprint': fingerprint,
+                            }
+
+    def setUp(self):
+        self._add_ssh_key('stacktester_key')
+
+    def tearDown(self):
+        self._delete_ssh_key('stacktester_key')
+
+    def _add_ssh_key(self, key_name):
+        """Add ssh key to tenant"""
+        response, body = self.os.nova.request('GET', '/os-keypairs')
+        _body = json.loads(body)
+        keypairs = _body.get('keypairs')
+        for keypair in keypairs:
+            if keypair['keypair']['name'] == key_name:
+                self._delete_ssh_key(key_name)
+
+        post_body = json.dumps({
+            'keypair': {
+                'name': key_name,
+                'public_key': self.ssh_keypair.get('pub_key'),
+                }
+            })
+        resp, body = self.os.nova.request('POST', '/os-keypairs', \
+                body=post_body)
+        self.assertEqual(200, resp.status)
+
+    def _delete_ssh_key(self, key_name):
+        resp, body = self.os.nova.request('DELETE', \
+                '/os-keypairs/%s' % key_name)
+        self.assertEqual(202, resp.status)
 
     def _assert_server_entity(self, server):
         actual_keys = set(server.keys())
-        expected_keys = set((
-            'id',
-            'name',
-            'hostId',
-            'status',
-            'metadata',
-            'addresses',
-            'links',
-            'progress',
-            'image',
-            'flavor',
-            'created',
-            'updated',
-            'accessIPv4',
-            'accessIPv6',
-
-            #KNOWN-ISSUE lp804093
-            'uuid',
-
-        ))
-        self.assertTrue(expected_keys <= actual_keys)
-
+        expected_keys = set (('id', 'links', 'OS-DCF:diskConfig'))
         server_id = str(server['id'])
         host = self.os.config.nova.host
         port = self.os.config.nova.port
@@ -72,12 +86,15 @@ class ServersTest(unittest.TestCase):
     def test_build_server_with_file(self):
         """Build a server with an injected file"""
 
+        #self._add_ssh_key('stacktester_key')
+
         file_contents = 'testing'
 
         expected_server = {
             'name': 'stacktester1',
             'imageRef': self.image_ref,
             'flavorRef': self.flavor_ref,
+            'key_name': 'stacktester_key',
             'personality': [
                 {
                     'path': '/etc/test.txt',
@@ -95,8 +112,9 @@ class ServersTest(unittest.TestCase):
         self.assertEqual(response.status, 202)
         _body = json.loads(body)
         self.assertEqual(_body.keys(), ['server'])
-        created_server = _body['server']
-        admin_pass = created_server.pop('adminPass', None)
+        admin_pass = _body['server'].get('adminPass')
+        server_id = _body['server'].get('id')
+        created_server = self.os.nova.get_server(server_id)
         self._assert_server_entity(created_server)
         self.assertEqual(expected_server['name'], created_server['name'])
 
@@ -115,13 +133,15 @@ class ServersTest(unittest.TestCase):
             self.fail("Failed to retrieve IP address from server entity")
 
         # Assert injected file is on instance, also verifying password works
-        client = ssh.Client(ip, 'root', admin_pass, self.ssh_timeout)
+        client = ssh.Client(ip, 'ubuntu', admin_pass, \
+                self.ssh_keypair['pkey'], self.ssh_timeout)
         injected_file = client.exec_command('cat /etc/test.txt')
         self.assertEqual(injected_file, file_contents)
 
         # Clean up created server
         self.os.nova.delete_server(server['id'])
 
+    @nose.tools.nottest
     def test_build_server_with_password(self):
         """Build a server with a password"""
 
@@ -132,6 +152,7 @@ class ServersTest(unittest.TestCase):
             'imageRef': self.image_ref,
             'flavorRef': self.flavor_ref,
             'adminPass': server_password,
+            'key_name': 'stacktester_key',
         }
 
         post_body = json.dumps({'server': expected_server})
@@ -143,8 +164,9 @@ class ServersTest(unittest.TestCase):
         self.assertEqual(response.status, 202)
         _body = json.loads(body)
         self.assertEqual(_body.keys(), ['server'])
-        created_server = _body['server']
-        admin_pass = created_server.pop('adminPass', None)
+        admin_pass = _body['server'].get('adminPass')
+        server_id = _body['server'].get('id')
+        created_server = self.os.nova.get_server(server_id)
         self._assert_server_entity(created_server)
         self.assertEqual(expected_server['name'], created_server['name'])
         self.assertEqual(expected_server['adminPass'], admin_pass)
@@ -164,8 +186,11 @@ class ServersTest(unittest.TestCase):
             self.fail("Failed to retrieve IP address from server entity")
 
         # Assert password was set to that in request
-        client = ssh.Client(ip, 'root', server_password, self.ssh_timeout)
+        # NOTE: won't work with out image
+        client = ssh.Client(ip, 'ubuntu', admin_pass, \
+                self.ssh_keypair['pkey'], self.ssh_timeout)
         self.assertTrue(client.test_connection_auth())
+
 
         # Clean up created server
         self.os.nova.delete_server(server['id'])
@@ -197,12 +222,15 @@ class ServersTest(unittest.TestCase):
     def test_build_server(self):
         """Build and manipulate a server"""
 
+        #self._add_ssh_key('stacktester_key')
+
         # Don't block for the server until later
         expected_server = {
             'name': 'stacktester1',
             'imageRef': self.image_ref,
             'flavorRef': self.flavor_ref,
             'metadata': {'testEntry': 'testValue'},
+            'key_name': 'stacktester_key',
         }
         post_body = json.dumps({'server': expected_server})
         response, body = self.os.nova.request('POST',
@@ -213,15 +241,16 @@ class ServersTest(unittest.TestCase):
         self.assertEqual(response.status, 202)
         _body = json.loads(body)
         self.assertEqual(_body.keys(), ['server'])
-        created_server = _body['server']
-        admin_pass = created_server.pop('adminPass')
+        admin_pass = _body['server'].get('adminPass')
+        server_id = _body['server'].get('id')
+        created_server = self.os.nova.get_server(server_id)
+
         self._assert_server_entity(created_server)
         self.assertEqual(expected_server['name'], created_server['name'])
         self.assertEqual(created_server['accessIPv4'], '')
         self.assertEqual(created_server['accessIPv6'], '')
         self.assertEqual(expected_server['metadata'],
                          created_server['metadata'])
-        server_id = created_server['id']
 
         # Get server again and ensure attributes stuck
         server = self.os.nova.get_server(server_id)
@@ -236,7 +265,7 @@ class ServersTest(unittest.TestCase):
 
         # Ensure server not returned with future changes-since
         future_time = utils.dump_isotime(update_time + datetime.timedelta(1))
-        params = 'changes-since?%s' % future_time
+        params = 'changes-since=%s' % future_time
         response, body = self.os.nova.request('GET', '/servers?%s' % params)
         servers = json.loads(body)['servers']
         self.assertTrue(len(servers) == 0)
@@ -459,8 +488,9 @@ class ServersTest(unittest.TestCase):
         except KeyError:
             self.fail("Failed to retrieve IP address from server entity")
 
-        # Assert password works
-        client = ssh.Client(ip, 'root', admin_pass, self.ssh_timeout)
+        # Assert ssh connection works
+        client = ssh.Client(ip, 'ubuntu', admin_pass, \
+                self.ssh_keypair['pkey'], self.ssh_timeout)
         self.assertTrue(client.test_connection_auth())
 
         # Delete server
@@ -493,12 +523,11 @@ class ServersTest(unittest.TestCase):
         fault = json.loads(body)
         expected_fault = {
             "badRequest": {
-                "message": "Cannot find requested image",
+                "message": "Invalid imageRef provided.",
                 "code": 400,
             },
         }
-        # KNOWN-ISSUE - The error message is confusing and should be improved
-        #self.assertEqual(fault, expected_fault)
+        self.assertEqual(fault, expected_fault)
 
     def test_create_server_invalid_flavor(self):
         """Create a server with an unknown flavor"""
@@ -518,9 +547,8 @@ class ServersTest(unittest.TestCase):
         fault = json.loads(body)
         expected_fault = {
             "badRequest": {
-                "message": "Cannot find requested flavor",
+                "message": "Invalid flavorRef provided.",
                 "code": 400,
             },
         }
-        # KNOWN-ISSUE lp804084
-        #self.assertEqual(fault, expected_fault)
+        self.assertEqual(fault, expected_fault)

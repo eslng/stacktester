@@ -2,19 +2,22 @@
 import time
 import socket
 import warnings
+import binascii
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     import paramiko
+    from paramiko import SSHException
 
 
 class Client(object):
 
-    def __init__(self, host, username, password, timeout=300):
+    def __init__(self, host, username, password, pkey=None, timeout=300):
         self.host = host
         self.username = username
         self.password = password
         self.timeout = timeout
+        self.private_key = pkey
 
     def _get_ssh_connection(self):
         """Returns an ssh connection to the specified host"""
@@ -27,8 +30,8 @@ class Client(object):
         while not self._is_timed_out(self.timeout, _start_time):
             try:
                 ssh.connect(self.host, username=self.username,
-                    password=self.password, look_for_keys=False,
-                    timeout=self.timeout)
+                    password=self.password, pkey=self.private_key,
+                    look_for_keys=False, timeout=self.timeout)
                 _timeout = False
                 break
             except socket.error:
@@ -78,3 +81,22 @@ class Client(object):
             return False
 
         return True
+
+
+def generate_key(ktype='dsa', bits=1024):
+    """Generates a keypair"""
+    key_table = {'dsa': paramiko.DSSKey,
+                 'rsa': paramiko.RSAKey,
+                }
+    if ktype == 'dsa' and bits > 1024:
+        raise SSHException('DSA keys must be 1024 bits')
+    if not key_table.has_key(ktype):
+        raise SSHException("Unknown %s algorithm to generate keys pair"
+                    % ktype)
+    private_key = key_table[ktype].generate(bits)
+    pub_key = '%s %s' % (private_key.get_name(), private_key.get_base64())
+    fp_hash = binascii.hexlify(private_key.get_fingerprint())
+    fingerprint = ":".join([fp_hash[i:2+i] \
+            for i in range(0, len(fp_hash), 2)])
+    return private_key, pub_key, fingerprint
+
